@@ -315,8 +315,8 @@ async function connectGlasses(): Promise<void> {
     textObject: [new TextContainerProperty({
       xPosition: 0,
       yPosition: 0,
-      width: 576,
-      height: 288,
+      width: 288,
+      height: 144,
       paddingLength: 6,
       containerID: 1,
       containerName: 'lyrics',
