@@ -45,7 +45,6 @@ let offsetMs = 0
 let message = 'Spotifyを接続してください'
 let lastTrackId = ''
 let lastGlassesText = ''
-let containerId = 1
 let writeQueue: Promise<unknown> = Promise.resolve()
 
 let baselineX = 0
@@ -65,11 +64,28 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <h2>1. Spotifyを接続</h2>
       <label for="client-id">Spotify Client ID</label>
       <input id="client-id" autocomplete="off" placeholder="Developer DashboardのClient ID" />
-      <p class="hint">Redirect URIとして次のURLをSpotifyアプリへ登録してください。</p>
-      <code id="redirect-uri"></code>
-      <div class="actions">
-        <button id="connect" class="primary">Spotifyに接続</button>
-        <button id="disconnect" class="secondary">切断</button>
+
+      <div id="browser-auth">
+        <p class="hint">Safariでこの画面を開き、Spotifyにログインしてください。Redirect URIとして次のURLをSpotifyへ登録します。</p>
+        <code id="redirect-uri"></code>
+        <div class="actions">
+          <button id="connect" class="primary">Spotifyに接続</button>
+          <button id="disconnect" class="secondary">切断</button>
+        </div>
+        <div id="token-out" style="display:none">
+          <p class="hint">接続キー（コピーして、G2側アプリの入力欄に貼り付けてください）</p>
+          <textarea id="token-blob" readonly rows="3"></textarea>
+          <button id="copy-token" class="secondary">接続キーをコピー</button>
+        </div>
+      </div>
+
+      <div id="glasses-auth" style="display:none">
+        <p class="hint">Safariで発行した接続キーを貼り付けて保存してください。</p>
+        <textarea id="token-in" rows="3" placeholder="接続キーを貼り付け"></textarea>
+        <div class="actions">
+          <button id="save-token" class="primary">保存して接続</button>
+          <button id="disconnect2" class="secondary">切断</button>
+        </div>
       </div>
     </section>
 
@@ -99,6 +115,11 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
 const $ = <T extends Element>(selector: string) => document.querySelector<T>(selector)!
 const clientIdInput = $<HTMLInputElement>('#client-id')
 const redirectEl = $<HTMLElement>('#redirect-uri')
+const browserAuthEl = $<HTMLElement>('#browser-auth')
+const glassesAuthEl = $<HTMLElement>('#glasses-auth')
+const tokenOutEl = $<HTMLElement>('#token-out')
+const tokenBlobEl = $<HTMLTextAreaElement>('#token-blob')
+const tokenInEl = $<HTMLTextAreaElement>('#token-in')
 const statusEl = $<HTMLElement>('#status')
 const trackEl = $<HTMLElement>('#track')
 const artistEl = $<HTMLElement>('#artist')
@@ -173,7 +194,7 @@ async function render(): Promise<void> {
   if (!bridge || text === lastGlassesText) return
   lastGlassesText = text
   writeQueue = writeQueue.then(() => bridge!.textContainerUpgrade(new TextContainerUpgrade({
-    containerID: containerId,
+    containerID: 1,
     containerName: 'lyrics',
     content: text,
   }))).catch((error) => console.error('G2 render failed', error))
@@ -243,21 +264,14 @@ async function connectSpotify(): Promise<void> {
     await render()
     return
   }
-  try {
-    message = 'Spotifyへ移動します…'
-    await render()
-    const verifier = createVerifier()
-    const state = createState()
-    await Promise.all([
-      writeStorage(STORAGE.clientId, clientId),
-      writeStorage(STORAGE.verifier, verifier),
-      writeStorage(STORAGE.oauthState, state),
-    ])
-    window.location.href = await authorizeUrl(clientId, redirectUri(), verifier, state)
-  } catch (error) {
-    message = `接続エラー: ${error instanceof Error ? error.message : String(error)}`
-    await render()
-  }
+  const verifier = createVerifier()
+  const state = createState()
+  await Promise.all([
+    writeStorage(STORAGE.clientId, clientId),
+    writeStorage(STORAGE.verifier, verifier),
+    writeStorage(STORAGE.oauthState, state),
+  ])
+  window.location.href = await authorizeUrl(clientId, redirectUri(), verifier, state)
 }
 
 async function handleOAuthCallback(): Promise<void> {
@@ -277,7 +291,44 @@ async function handleOAuthCallback(): Promise<void> {
   url.searchParams.delete('code')
   url.searchParams.delete('state')
   history.replaceState({}, '', url.toString())
-  message = 'Spotifyに接続しました'
+  message = 'Spotifyに接続しました。下の接続キーをコピーしてください。'
+  if (tokens.refreshToken) {
+    tokenBlobEl.value = `${clientId}~${tokens.refreshToken}`
+    tokenOutEl.style.display = 'block'
+  }
+}
+
+async function saveConnectionKey(): Promise<void> {
+  const blob = tokenInEl.value.trim()
+  const sep = blob.indexOf('~')
+  if (sep < 0) {
+    message = '接続キーの形式が正しくありません'
+    await render()
+    return
+  }
+  clientId = blob.slice(0, sep).trim()
+  const refreshToken = blob.slice(sep + 1).trim()
+  if (!clientId || !refreshToken) {
+    message = '接続キーの形式が正しくありません'
+    await render()
+    return
+  }
+  clientIdInput.value = clientId
+  tokens = { accessToken: '', refreshToken, expiresAt: 0 }
+  await Promise.all([
+    writeStorage(STORAGE.clientId, clientId),
+    writeStorage(STORAGE.token, JSON.stringify(tokens)),
+  ])
+  try {
+    await ensureFreshToken()
+    await writeStorage(STORAGE.token, JSON.stringify(tokens))
+    message = 'Spotifyに接続しました'
+    await render()
+    await pollSpotify()
+  } catch (error) {
+    message = `接続キーが無効です: ${error instanceof Error ? error.message : String(error)}`
+    await render()
+  }
 }
 
 async function handleImu(x: number): Promise<void> {
@@ -311,50 +362,21 @@ async function connectGlasses(): Promise<void> {
     message = 'ブラウザプレビュー（G2未接続）'
     return
   }
-  let deviceSummary = 'device?'
-  try {
-    const info = await bridge.getDeviceInfo()
-    deviceSummary = info
-      ? `${info.model}/${info.status?.connectType ?? '?'}/batt${info.status?.batteryLevel ?? '?'}`
-      : 'null'
-  } catch (error) {
-    deviceSummary = `err:${error instanceof Error ? error.message : String(error)}`
-  }
-  message = `診断: ${deviceSummary}`
-  await render()
-  const candidates: Array<{ label: string; id: number; w: number; h: number; capture: number }> = [
-    { label: 'A', id: 0, w: 288, h: 144, capture: 1 },
-    { label: 'B', id: 1, w: 200, h: 100, capture: 1 },
-    { label: 'C', id: 0, w: 200, h: 100, capture: 0 },
-    { label: 'D', id: 1, w: 320, h: 200, capture: 1 },
-    { label: 'E', id: 0, w: 576, h: 288, capture: 1 },
-  ]
-  const failures: string[] = []
-  let created = false
-  for (const c of candidates) {
-    const result = await bridge.createStartUpPageContainer(new CreateStartUpPageContainer({
-      containerTotalNum: 1,
-      textObject: [new TextContainerProperty({
-        xPosition: 0,
-        yPosition: 0,
-        width: c.w,
-        height: c.h,
-        containerID: c.id,
-        containerName: 'lyrics',
-        content: 'G2 LYRICS',
-        isEventCapture: c.capture,
-      })],
-    }))
-    if (result === StartUpPageCreateResult.success) {
-      containerId = c.id
-      message = `G2接続OK (config ${c.label})`
-      created = true
-      break
-    }
-    failures.push(`${c.label}=${result}`)
-  }
-  if (!created) throw new Error(`G2 init v5 [${deviceSummary}] [${failures.join(' ')}]`)
-  await render()
+  const result = await bridge.createStartUpPageContainer(new CreateStartUpPageContainer({
+    containerTotalNum: 1,
+    textObject: [new TextContainerProperty({
+      xPosition: 0,
+      yPosition: 0,
+      width: 576,
+      height: 288,
+      paddingLength: 6,
+      containerID: 1,
+      containerName: 'lyrics',
+      content: glassesText(),
+      isEventCapture: 1,
+    })],
+  }))
+  if (result !== StartUpPageCreateResult.success) throw new Error(`G2 page error (${result})`)
   await bridge.imuControl(true, ImuReportPace.P100)
   bridge.onEvenHubEvent((event) => {
     if (event.sysEvent?.eventType === OsEventTypeList.IMU_DATA_REPORT && event.sysEvent.imuData) {
@@ -373,6 +395,10 @@ async function connectGlasses(): Promise<void> {
 async function bootstrap(): Promise<void> {
   redirectEl.textContent = redirectUri()
   await connectGlasses()
+  if (bridge) {
+    browserAuthEl.style.display = 'none'
+    glassesAuthEl.style.display = 'block'
+  }
   clientId = await readStorage(STORAGE.clientId)
   clientIdInput.value = clientId
   const savedToken = await readStorage(STORAGE.token)
@@ -389,14 +415,28 @@ async function bootstrap(): Promise<void> {
   setInterval(() => void render(), DISPLAY_TICK_MS)
 }
 
-$('#connect').addEventListener('click', () => void connectSpotify())
-$('#disconnect').addEventListener('click', async () => {
+async function disconnectSpotify(): Promise<void> {
   tokens = null
   playback = null
   lyrics = null
   lastTrackId = ''
   await writeStorage(STORAGE.token, '')
   message = 'Spotifyとの接続を解除しました'
+  await render()
+}
+
+$('#connect').addEventListener('click', () => void connectSpotify())
+$('#disconnect').addEventListener('click', () => void disconnectSpotify())
+$('#disconnect2').addEventListener('click', () => void disconnectSpotify())
+$('#save-token').addEventListener('click', () => void saveConnectionKey())
+$('#copy-token').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(tokenBlobEl.value)
+    message = '接続キーをコピーしました'
+  } catch {
+    tokenBlobEl.select()
+    message = 'コピーできない場合は手動で選択してください'
+  }
   await render()
 })
 $('#earlier').addEventListener('click', () => void setOffset(offsetMs - GESTURE_STEP_MS))
