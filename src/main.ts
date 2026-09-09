@@ -45,6 +45,7 @@ let offsetMs = 0
 let message = 'Spotifyを接続してください'
 let lastTrackId = ''
 let lastGlassesText = ''
+let containerId = 1
 let writeQueue: Promise<unknown> = Promise.resolve()
 
 let baselineX = 0
@@ -172,7 +173,7 @@ async function render(): Promise<void> {
   if (!bridge || text === lastGlassesText) return
   lastGlassesText = text
   writeQueue = writeQueue.then(() => bridge!.textContainerUpgrade(new TextContainerUpgrade({
-    containerID: 1,
+    containerID: containerId,
     containerName: 'lyrics',
     content: text,
   }))).catch((error) => console.error('G2 render failed', error))
@@ -310,20 +311,38 @@ async function connectGlasses(): Promise<void> {
     message = 'ブラウザプレビュー（G2未接続）'
     return
   }
-  const result = await bridge.createStartUpPageContainer(new CreateStartUpPageContainer({
-    containerTotalNum: 1,
-    textObject: [new TextContainerProperty({
-      xPosition: 0,
-      yPosition: 0,
-      width: 288,
-      height: 144,
-      containerID: 1,
-      containerName: 'lyrics',
-      content: 'G2 LYRICS',
-      isEventCapture: 1,
-    })],
-  }))
-  if (result !== StartUpPageCreateResult.success) throw new Error(`G2 init v3 failed code ${result}`)
+  const candidates: Array<{ label: string; id: number; w: number; h: number; capture: number }> = [
+    { label: 'A', id: 0, w: 288, h: 144, capture: 1 },
+    { label: 'B', id: 1, w: 200, h: 100, capture: 1 },
+    { label: 'C', id: 0, w: 200, h: 100, capture: 0 },
+    { label: 'D', id: 1, w: 320, h: 200, capture: 1 },
+    { label: 'E', id: 0, w: 576, h: 288, capture: 1 },
+  ]
+  const failures: string[] = []
+  let created = false
+  for (const c of candidates) {
+    const result = await bridge.createStartUpPageContainer(new CreateStartUpPageContainer({
+      containerTotalNum: 1,
+      textObject: [new TextContainerProperty({
+        xPosition: 0,
+        yPosition: 0,
+        width: c.w,
+        height: c.h,
+        containerID: c.id,
+        containerName: 'lyrics',
+        content: 'G2 LYRICS',
+        isEventCapture: c.capture,
+      })],
+    }))
+    if (result === StartUpPageCreateResult.success) {
+      containerId = c.id
+      message = `G2接続OK (config ${c.label})`
+      created = true
+      break
+    }
+    failures.push(`${c.label}=${result}`)
+  }
+  if (!created) throw new Error(`G2 init v4 failed [${failures.join(' ')}]`)
   await render()
   await bridge.imuControl(true, ImuReportPace.P100)
   bridge.onEvenHubEvent((event) => {
