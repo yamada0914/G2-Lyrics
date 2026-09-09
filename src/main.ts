@@ -53,8 +53,15 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
 
     <section class="card">
       <h2>1. Spotifyを接続</h2>
-      <label for="client-id">Spotify Client ID</label>
-      <input id="client-id" autocomplete="off" placeholder="Developer DashboardのClient ID" />
+      <div id="client-id-row">
+        <label for="client-id">Spotify Client ID</label>
+        <input id="client-id" autocomplete="off" placeholder="Developer DashboardのClient ID" />
+      </div>
+
+      <div id="connected" style="display:none">
+        <p class="hint">Spotify接続済み。次回からは自動で接続します。</p>
+        <button id="disconnect3" class="secondary">切断</button>
+      </div>
 
       <div id="browser-auth">
         <p class="hint">Safariでこの画面を開き、Spotifyにログインしてください。Redirect URIとして次のURLをSpotifyへ登録します。</p>
@@ -105,6 +112,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
 
 const $ = <T extends Element>(selector: string) => document.querySelector<T>(selector)!
 const clientIdInput = $<HTMLInputElement>('#client-id')
+const clientIdRowEl = $<HTMLElement>('#client-id-row')
+const connectedEl = $<HTMLElement>('#connected')
 const redirectEl = $<HTMLElement>('#redirect-uri')
 const browserAuthEl = $<HTMLElement>('#browser-auth')
 const glassesAuthEl = $<HTMLElement>('#glasses-auth')
@@ -116,6 +125,18 @@ const trackEl = $<HTMLElement>('#track')
 const artistEl = $<HTMLElement>('#artist')
 const offsetEl = $<HTMLElement>('#offset')
 const previewEl = $<HTMLPreElement>('#preview')
+
+// On glasses the connection key carries the Client ID, so hide the input and
+// only show the paste field until a token is stored. Once connected we hide the
+// setup entirely so no re-entry is needed on later launches.
+function refreshAuthUi(): void {
+  const onGlasses = !!bridge
+  const isConnected = !!tokens
+  clientIdRowEl.style.display = onGlasses ? 'none' : 'block'
+  browserAuthEl.style.display = onGlasses ? 'none' : 'block'
+  glassesAuthEl.style.display = onGlasses && !isConnected ? 'block' : 'none'
+  connectedEl.style.display = onGlasses && isConnected ? 'block' : 'none'
+}
 
 function redirectUri(): string {
   const url = new URL(window.location.href)
@@ -336,9 +357,12 @@ async function saveConnectionKey(): Promise<void> {
     await ensureFreshToken()
     await writeStorage(STORAGE.token, JSON.stringify(tokens))
     message = 'Spotifyに接続しました'
+    refreshAuthUi()
     await render()
     await pollSpotify()
   } catch (error) {
+    tokens = null
+    refreshAuthUi()
     message = `接続キーが無効です: ${error instanceof Error ? error.message : String(error)}`
     await render()
   }
@@ -391,10 +415,6 @@ async function connectGlasses(): Promise<void> {
 async function bootstrap(): Promise<void> {
   redirectEl.textContent = redirectUri()
   await connectGlasses()
-  if (bridge) {
-    browserAuthEl.style.display = 'none'
-    glassesAuthEl.style.display = 'block'
-  }
   clientId = await readStorage(STORAGE.clientId)
   clientIdInput.value = clientId
   const savedToken = await readStorage(STORAGE.token)
@@ -404,6 +424,7 @@ async function bootstrap(): Promise<void> {
     try { tokens = JSON.parse(savedToken) as SpotifyTokens } catch { tokens = null }
   }
   await handleOAuthCallback()
+  refreshAuthUi()
   // On glasses, jump straight to playback. In the browser keep the OAuth
   // message (e.g. the "copy the connection key" instruction) visible.
   if (tokens && bridge) message = 'Spotifyの再生を確認中…'
@@ -419,6 +440,7 @@ async function disconnectSpotify(): Promise<void> {
   lyrics = null
   lastTrackId = ''
   await writeStorage(STORAGE.token, '')
+  refreshAuthUi()
   message = 'Spotifyとの接続を解除しました'
   await render()
 }
@@ -426,6 +448,7 @@ async function disconnectSpotify(): Promise<void> {
 $('#connect').addEventListener('click', () => void connectSpotify())
 $('#disconnect').addEventListener('click', () => void disconnectSpotify())
 $('#disconnect2').addEventListener('click', () => void disconnectSpotify())
+$('#disconnect3').addEventListener('click', () => void disconnectSpotify())
 $('#save-token').addEventListener('click', () => void saveConnectionKey())
 $('#copy-token').addEventListener('click', async () => {
   try {
