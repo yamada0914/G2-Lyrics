@@ -311,6 +311,17 @@ async function connectGlasses(): Promise<void> {
     message = 'ブラウザプレビュー（G2未接続）'
     return
   }
+  let deviceSummary = 'device?'
+  try {
+    const info = await bridge.getDeviceInfo()
+    deviceSummary = info
+      ? `${info.model}/${info.status?.connectType ?? '?'}/batt${info.status?.batteryLevel ?? '?'}`
+      : 'null'
+  } catch (error) {
+    deviceSummary = `err:${error instanceof Error ? error.message : String(error)}`
+  }
+  message = `診断: ${deviceSummary}`
+  await render()
   const candidates: Array<{ label: string; id: number; w: number; h: number; capture: number }> = [
     { label: 'A', id: 0, w: 288, h: 144, capture: 1 },
     { label: 'B', id: 1, w: 200, h: 100, capture: 1 },
@@ -342,7 +353,7 @@ async function connectGlasses(): Promise<void> {
     }
     failures.push(`${c.label}=${result}`)
   }
-  if (!created) throw new Error(`G2 init v4 failed [${failures.join(' ')}]`)
+  if (!created) throw new Error(`G2 init v5 [${deviceSummary}] [${failures.join(' ')}]`)
   await render()
   await bridge.imuControl(true, ImuReportPace.P100)
   bridge.onEvenHubEvent((event) => {
