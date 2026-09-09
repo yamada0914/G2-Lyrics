@@ -372,21 +372,30 @@ async function connectGlasses(): Promise<void> {
     message = 'ブラウザプレビュー（G2未接続）'
     return
   }
-  const result = await bridge.createStartUpPageContainer(new CreateStartUpPageContainer({
-    containerTotalNum: 1,
-    textObject: [new TextContainerProperty({
-      xPosition: 0,
-      yPosition: 0,
-      width: 576,
-      height: 288,
-      paddingLength: 6,
-      containerID: 1,
-      containerName: 'lyrics',
-      content: glassesText(),
-      isEventCapture: 1,
-    })],
-  }))
-  if (result !== StartUpPageCreateResult.success) throw new Error(`G2 page error (${result})`)
+  // In a plain browser (e.g. Safari) waitForEvenAppBridge may still resolve a
+  // bridge, but the glasses APIs return invalid. Treat any failure here as
+  // "not on glasses" so the rest of bootstrap (OAuth callback) still runs.
+  try {
+    const result = await bridge.createStartUpPageContainer(new CreateStartUpPageContainer({
+      containerTotalNum: 1,
+      textObject: [new TextContainerProperty({
+        xPosition: 0,
+        yPosition: 0,
+        width: 576,
+        height: 288,
+        paddingLength: 6,
+        containerID: 1,
+        containerName: 'lyrics',
+        content: glassesText(),
+        isEventCapture: 1,
+      })],
+    }))
+    if (result !== StartUpPageCreateResult.success) throw new Error(`G2 page error (${result})`)
+  } catch (error) {
+    console.warn('G2 not available, running as browser', error)
+    bridge = null
+    return
+  }
   await bridge.imuControl(true, ImuReportPace.P100)
   bridge.onEvenHubEvent((event) => {
     if (event.sysEvent?.eventType === OsEventTypeList.IMU_DATA_REPORT && event.sysEvent.imuData) {
@@ -418,7 +427,9 @@ async function bootstrap(): Promise<void> {
     try { tokens = JSON.parse(savedToken) as SpotifyTokens } catch { tokens = null }
   }
   await handleOAuthCallback()
-  message = tokens ? 'Spotifyの再生を確認中…' : message
+  // On glasses, jump straight to playback. In the browser keep the OAuth
+  // message (e.g. the "copy the connection key" instruction) visible.
+  if (tokens && bridge) message = 'Spotifyの再生を確認中…'
   await render()
   if (tokens) await pollSpotify()
   setInterval(() => void pollSpotify(), SPOTIFY_POLL_MS)
