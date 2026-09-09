@@ -1,7 +1,6 @@
 import './style.css'
 import {
   CreateStartUpPageContainer,
-  ImuReportPace,
   OsEventTypeList,
   StartUpPageCreateResult,
   TextContainerProperty,
@@ -30,9 +29,6 @@ const STORAGE = {
 const SPOTIFY_POLL_MS = 4_000
 const DISPLAY_TICK_MS = 200
 const GESTURE_STEP_MS = 500
-const GESTURE_THRESHOLD = 0.34
-const GESTURE_COOLDOWN_MS = 700
-const CALIBRATION_SAMPLES = 12
 
 type Bridge = Awaited<ReturnType<typeof waitForEvenAppBridge>>
 
@@ -46,11 +42,6 @@ let message = 'Spotifyを接続してください'
 let lastTrackId = ''
 let lastGlassesText = ''
 let writeQueue: Promise<unknown> = Promise.resolve()
-
-let baselineX = 0
-let calibrationCount = 0
-let gestureArmed = true
-let lastGestureAt = 0
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <main class="phone-app">
@@ -102,10 +93,10 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     </section>
 
     <section class="card guide">
-      <h2>首ジェスチャー</h2>
-      <p>左へ傾ける：歌詞を0.5秒早める</p>
-      <p>右へ傾ける：歌詞を0.5秒遅らせる</p>
-      <p>中央へ戻すと次の操作を受け付けます。</p>
+      <h2>タイミング調整</h2>
+      <p>スマホの「−0.5秒／+0.5秒」ボタンで調整できます。</p>
+      <p>タッチパッドの上下スワイプでも±0.5秒調整できます。</p>
+      <p>シングルタップで再同期、ダブルタップで終了。</p>
     </section>
 
     <pre id="preview">G2 display preview</pre>
@@ -341,27 +332,6 @@ async function saveConnectionKey(): Promise<void> {
   }
 }
 
-async function handleImu(x: number): Promise<void> {
-  if (calibrationCount < CALIBRATION_SAMPLES) {
-    baselineX += x
-    calibrationCount += 1
-    if (calibrationCount === CALIBRATION_SAMPLES) baselineX /= CALIBRATION_SAMPLES
-    return
-  }
-  const delta = x - baselineX
-  if (Math.abs(delta) < GESTURE_THRESHOLD * 0.45) {
-    gestureArmed = true
-    return
-  }
-  const now = Date.now()
-  if (!gestureArmed || now - lastGestureAt < GESTURE_COOLDOWN_MS) return
-  if (Math.abs(delta) >= GESTURE_THRESHOLD) {
-    gestureArmed = false
-    lastGestureAt = now
-    await setOffset(offsetMs + (delta > 0 ? GESTURE_STEP_MS : -GESTURE_STEP_MS))
-  }
-}
-
 async function connectGlasses(): Promise<void> {
   try {
     bridge = await Promise.race([
@@ -396,12 +366,7 @@ async function connectGlasses(): Promise<void> {
     bridge = null
     return
   }
-  await bridge.imuControl(true, ImuReportPace.P100)
   bridge.onEvenHubEvent((event) => {
-    if (event.sysEvent?.eventType === OsEventTypeList.IMU_DATA_REPORT && event.sysEvent.imuData) {
-      void handleImu(event.sysEvent.imuData.x ?? 0)
-      return
-    }
     const type = event.textEvent?.eventType ?? event.listEvent?.eventType ?? event.sysEvent?.eventType
     if (type === OsEventTypeList.SCROLL_TOP_EVENT) void setOffset(offsetMs - GESTURE_STEP_MS)
     if (type === OsEventTypeList.SCROLL_BOTTOM_EVENT) void setOffset(offsetMs + GESTURE_STEP_MS)
