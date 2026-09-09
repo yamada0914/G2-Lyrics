@@ -317,14 +317,14 @@ async function connectGlasses(): Promise<void> {
       yPosition: 0,
       width: 288,
       height: 144,
-      paddingLength: 6,
       containerID: 1,
       containerName: 'lyrics',
-      content: glassesText(),
+      content: 'G2 LYRICS',
       isEventCapture: 1,
     })],
   }))
-  if (result !== StartUpPageCreateResult.success) throw new Error(`G2 page error (${result})`)
+  if (result !== StartUpPageCreateResult.success) throw new Error(`G2 init v3 failed code ${result}`)
+  await render()
   await bridge.imuControl(true, ImuReportPace.P100)
   bridge.onEvenHubEvent((event) => {
     if (event.sysEvent?.eventType === OsEventTypeList.IMU_DATA_REPORT && event.sysEvent.imuData) {
