@@ -242,14 +242,21 @@ async function connectSpotify(): Promise<void> {
     await render()
     return
   }
-  const verifier = createVerifier()
-  const state = createState()
-  await Promise.all([
-    writeStorage(STORAGE.clientId, clientId),
-    writeStorage(STORAGE.verifier, verifier),
-    writeStorage(STORAGE.oauthState, state),
-  ])
-  window.location.href = await authorizeUrl(clientId, redirectUri(), verifier, state)
+  try {
+    message = 'Spotifyへ移動します…'
+    await render()
+    const verifier = createVerifier()
+    const state = createState()
+    await Promise.all([
+      writeStorage(STORAGE.clientId, clientId),
+      writeStorage(STORAGE.verifier, verifier),
+      writeStorage(STORAGE.oauthState, state),
+    ])
+    window.location.href = await authorizeUrl(clientId, redirectUri(), verifier, state)
+  } catch (error) {
+    message = `接続エラー: ${error instanceof Error ? error.message : String(error)}`
+    await render()
+  }
 }
 
 async function handleOAuthCallback(): Promise<void> {
