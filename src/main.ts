@@ -229,21 +229,33 @@ async function pollSpotify(): Promise<void> {
     message = latest.isPlaying ? 'Spotifyと同期中' : 'Spotifyは一時停止中'
     if (latest.id !== lastTrackId) {
       lastTrackId = latest.id
+      lyrics = null
       message = '同期歌詞を検索中…'
       await render()
-      lyrics = await findLyrics({
-        title: latest.title,
-        artist: latest.artist,
-        album: latest.album,
-        durationMs: latest.durationMs,
-      })
+      try {
+        lyrics = await findLyrics({
+          title: latest.title,
+          artist: latest.artist,
+          album: latest.album,
+          durationMs: latest.durationMs,
+        })
+      } catch {
+        // Transient lookup failure: retry on the next poll instead of
+        // leaving this track permanently without lyrics.
+        lastTrackId = ''
+        message = '歌詞の取得に失敗（再試行します）'
+        await render()
+        return
+      }
       message = lyrics
         ? lyrics.lines.length ? '同期歌詞を表示中' : '時間情報のない歌詞です'
         : 'LRCLIBに歌詞がありません'
     }
     await render()
   } catch (error) {
-    message = error instanceof Error ? error.message : String(error)
+    // A network hiccup shouldn't wipe the last track/lyrics. estimatedPosition
+    // keeps advancing, so the glasses keep scrolling while we recover.
+    message = error instanceof TypeError ? '接続を確認中…' : error instanceof Error ? error.message : String(error)
     await render()
   }
 }
