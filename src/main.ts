@@ -141,7 +141,7 @@ async function readStorage(key: string): Promise<string> {
 }
 
 async function writeStorage(key: string, value: string): Promise<void> {
-  localStorage.setItem(key, value)
+  try { localStorage.setItem(key, value) } catch { /* Safari private mode may block */ }
   if (bridge) {
     try { await bridge.setLocalStorage(key, value) } catch { /* browser fallback remains */ }
   }
@@ -264,14 +264,24 @@ async function connectSpotify(): Promise<void> {
     await render()
     return
   }
-  const verifier = createVerifier()
-  const state = createState()
-  await Promise.all([
-    writeStorage(STORAGE.clientId, clientId),
-    writeStorage(STORAGE.verifier, verifier),
-    writeStorage(STORAGE.oauthState, state),
-  ])
-  window.location.href = await authorizeUrl(clientId, redirectUri(), verifier, state)
+  try {
+    message = 'Spotifyへ移動します…(v2)'
+    await render()
+    const verifier = createVerifier()
+    const state = createState()
+    await Promise.all([
+      writeStorage(STORAGE.clientId, clientId),
+      writeStorage(STORAGE.verifier, verifier),
+      writeStorage(STORAGE.oauthState, state),
+    ])
+    const url = await authorizeUrl(clientId, redirectUri(), verifier, state)
+    message = `移動中: ${url.slice(0, 40)}…`
+    await render()
+    window.location.assign(url)
+  } catch (error) {
+    message = `接続エラー: ${error instanceof Error ? error.message : String(error)}`
+    await render()
+  }
 }
 
 async function handleOAuthCallback(): Promise<void> {
